@@ -1,2 +1,1 @@
-# blazegraph_conf
-Supporting config files for blazegraph install
+sample config files for bigdata ri

@@ -1,0 +1,197 @@
+#!/bin/bash
+#
+# This is a conglomeration of work by Steve Young, Richard Wincewicz, William Panting, Adam Vessey, Jason MacWilliams, Gervais de Montbrun. This was modified to work for blazegraph tomcat container.
+
+# it's a service!
+# chkconfig: 2345 64 36
+# description: Tomcat, with Blazegraph.
+### BEGIN INIT INFO
+# Provides: blazegraph
+# Required-Start: $all
+# Required-Stop: $all
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: Start tomcat at boot.
+# Description: Start the tomcat servelet container holding Blazegraph.
+### END INIT INFO
+
+# Source function library.
+if [ -f /etc/init.d/functions ]; then
+     . /etc/init.d/functions
+fi
+
+#set ENV variables for blazegraph user ~/.bash_profile
+#export BLZG_CONF=/etc/bigdata
+#export CATALINA_HOME=/usr/share/tomcat
+#export CATALINA_PID="/usr/share/tomcat/catalina.pid"
+#export JAVA_HOME=/usr/java/jdk1.7.0_80
+#export BLZG_USER=blazegraph
+#export PATH=/usr/java/jdk1.7.0_80/bin:/usr/share/tomcat/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin:/root/bin
+#export JAVA_OPTS="-server -Xmx2000m -Dcom.bigdata.rdf.sail.webapp.ConfigParams.propertyFile=/etc/bigdata/RWStore.properties -Dlog4j.configuration=/etc/bigdata/log4j.properties -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -XX:+UseConcMarkSweepGC"
+
+# Source function library.
+if [ -f /var/bigdata/.bash_profile ]; then
+     . /var/bigdata/.bash_profile
+fi
+
+#****** CHECK FOR ROOT STATUS AND BLOCK IT ******#
+if [ -z "$BLZG_USER" ]; then
+  ASROOT=0 # a flag to force "run as root"
+  for var in "$@"; do
+    case $var in
+      "-r")
+        ASROOT=1
+        ;;
+    esac
+  done
+
+  # check for root status
+  if [[ $EUID -eq 0 && $ASROOT -eq 0 ]]; then
+    echo "It looks like you're trying to run this script as root"
+    echo "This is not normally allowed, to force it use $0 -r"
+    exit 1
+  fi
+fi
+
+PID_SEARCH="pgrep -nf -u $BLZG_USER $BLZG_CONF.*tomcat"
+START_STOP_WAIT=30
+
+run_this_one() {
+  if [ -n "$BLZG_USER" ]; then
+    #Specify a shell, because the blazegraph user should not have one in passwd (so as to not let people login as blazegraph)
+    /bin/su - $BLZG_USER --shell=/bin/bash --command="$1"
+  else
+    $1
+  fi
+}
+
+start() {
+  if [ `$PID_SEARCH` ]; then
+    echo "Blazegraph already running! Try running with \"force-start\" if you know for certain it is not running."
+  else
+    if [ -f $CATALINA_PID ]; then
+      echo "Removing/clearing stale PID file"
+      rm -rf $CATALINA_PID
+    fi
+    force_start
+  fi
+}
+
+force_start() {
+  echo "> Starting..."
+  run_this_one $CATALINA_HOME/bin/startup.sh
+  echo "Waiting for server startup to complete"
+  sleep 2
+  startwait=$START_STOP_WAIT
+  count=0
+  while [ $count -lt $startwait ]; do
+    echo -n "."
+    sleep 1
+    count=`expr $count + 1`
+    PID=`$PID_SEARCH`
+    if [ ! $PID = "" ]; then
+      break
+    fi
+  done
+  ps -p $PID &>/dev/null 2>/dev/null
+    RETVAL=$?
+    if [ $RETVAL = 0 ]; then
+      echo ""
+      echo "Blazegraph has started..."
+      return 0
+    else
+      echo ""
+      echo "Blazegraph failed to start... Check your logs"
+      return 1
+    fi
+}
+
+stop()
+{
+  PID=`$PID_SEARCH`
+  if [ $PID ]; then
+    echo "> Stopping..."
+    run_this_one $CATALINA_HOME/bin/shutdown.sh
+    echo "Waiting for server shutdown to complete"
+    sleep 2
+    kwait=$START_STOP_WAIT
+    count=0;
+    while [ $count -lt $kwait ]; do
+      sleep 1
+      count=`expr $count + 1`
+      PID=`$PID_SEARCH`
+      if [ ! $PID = "" ]; then
+        echo -n "."
+      else
+        break
+      fi
+    done
+    echo ""
+    if [ $count -eq $kwait ]; then
+      echo "process is still running after $START_STOP_WAIT seconds, killing process"
+      PID=`$PID_SEARCH`
+      kill $PID
+      sleep 5
+
+      # if it’s still running use kill -9
+      PID=`$PID_SEARCH`
+      if [ $PID ]; then
+      echo "process is still running, using kill -9"
+      kill -9 $PID
+      sleep 5
+      fi
+    fi
+    PID=`$PID_SEARCH`
+    if [ $PID ]; then
+      echo "process is still running, I give up"
+      return 1
+    else
+      if [ -f $CATALINA_PID ]; then
+        echo "Removing/clearing stale PID file"
+        rm -rf $CATALINA_PID
+      fi
+      echo "Blazegraph shutdown completed"
+      return 0
+    fi
+  else
+    echo "Blazegraph is not currently running, you can start it with $0 start"
+  fi
+}
+
+status()
+{
+  PID=`$PID_SEARCH`
+
+  if [ $PID ]; then
+    echo "Blazegraph is up and running with PID="$PID
+    return 0
+  else
+    echo "Blazegraph is not currently running, you can start it with $0 start"
+    return 1
+  fi
+
+}
+
+deploy()
+{
+  stop
+  start
+  echo "Sleeping for 60 seconds"
+  sleep 60
+  stop
+}
+
+case "$1" in
+  start) start ;;
+  force-start) force_start ;;
+  stop) stop ;;
+  restart) stop ; start ;;
+  status) status ;;
+  deploy) deploy ;;
+  *)
+    echo "Usage: `basename $0` {start|stop|status|restart|force-start}"
+    exit 2
+  ;;
+esac
+
+exit $?
